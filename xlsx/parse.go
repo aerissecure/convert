@@ -198,16 +198,23 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 		lastContentRow := -1
 		lastContentCol := -1
 
-		// Scan all cells that actually exist in the XML. Any defined cell is
-		// considered content because it either has a value or explicit
-		// formatting. While scanning we keep track of the furthest row and
-		// column indexes encountered.
+		// Scan all cells for actual content. A cell counts as content only if
+		// its formatted value is non-empty. (An empty string means the cell is
+		// effectively blank even if it carries style information.)  While
+		// scanning we keep track of the furthest row and column indexes that
+		// contain such content.
 		for _, row := range sheet.Rows() {
 			rowIdx := int(row.RowNumber()) - 1
-			if len(row.Cells()) > 0 && rowIdx > lastContentRow {
-				lastContentRow = rowIdx
-			}
+
+			rowHasContent := false
 			for _, cell := range row.Cells() {
+				if cell.GetFormattedValue() == "" {
+					continue
+				}
+
+				// Cell has visible content.
+				rowHasContent = true
+
 				colName, err := cell.Column()
 				if err != nil {
 					continue
@@ -216,6 +223,10 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 				if colIdx > lastContentCol {
 					lastContentCol = colIdx
 				}
+			}
+
+			if rowHasContent && rowIdx > lastContentRow {
+				lastContentRow = rowIdx
 			}
 		}
 
