@@ -3,6 +3,7 @@ package xlsx
 import (
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -10,6 +11,75 @@ import (
 	"github.com/unidoc/unioffice/spreadsheet"
 	"github.com/unidoc/unioffice/spreadsheet/reference"
 )
+
+// applyTint adjusts an RGB hex value according to Excel tint rules.
+func applyTint(hex string, tint float64) string {
+	r, _ := strconv.ParseInt(hex[0:2], 16, 64)
+	g, _ := strconv.ParseInt(hex[2:4], 16, 64)
+	b, _ := strconv.ParseInt(hex[4:6], 16, 64)
+	adjust := func(c int64) int64 {
+		if tint < 0 {
+			return int64(math.Round(float64(c) * (1 + tint)))
+		}
+		return int64(math.Round(float64(c) + (255-float64(c))*tint))
+	}
+	r2 := int64(math.Max(0, math.Min(255, float64(adjust(r)))))
+	g2 := int64(math.Max(0, math.Min(255, float64(adjust(g)))))
+	b2 := int64(math.Max(0, math.Min(255, float64(adjust(b)))))
+	return fmt.Sprintf("%02X%02X%02X", r2, g2, b2)
+}
+
+// resolveCTColor converts OOXML CT_Color into hex.
+func resolveCTColor(c *sml.CT_Color, wb *spreadsheet.Workbook) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	if c.RgbAttr != nil {
+		return normalizeColor(*c.RgbAttr), true
+	}
+	if c.ThemeAttr != nil {
+		base, ok := ThemeColorToRGB(wb, int(*c.ThemeAttr))
+		if !ok {
+			return "", false
+		}
+		if c.TintAttr != nil {
+			base = applyTint(base, *c.TintAttr)
+		}
+		return base, true
+	}
+	return "", false
+}
+
+// getFillColorFromDxf returns hex color from dxf fill.
+func getFillColorFromDxf(dxfId uint32, ss *sml.StyleSheet, wb *spreadsheet.Workbook) (string, bool) {
+	if ss.Dxfs == nil || int(dxfId) >= len(ss.Dxfs.Dxf) {
+		return "", false
+	}
+	dxf := ss.Dxfs.Dxf[dxfId]
+	if dxf.Fill != nil && dxf.Fill.PatternFill != nil && dxf.Fill.PatternFill.FgColor != nil {
+		return resolveCTColor(dxf.Fill.PatternFill.FgColor, wb)
+	}
+	return "", false
+}
+
+// tableColors captures resolved colors for table parts.
+type tableColors struct {
+	header     string
+	stripe1    string
+	stripe2    string
+	stripeSize uint32
+}
+
+// simpleTableStyle holds minimal info needed for applying row stripes/header styling.
+type simpleTableStyle struct {
+	startRow, endRow int
+	startCol, endCol int
+	colors           tableColors
+}
+
+func (s simpleTableStyle) contains(rowIdx, colIdx int) bool {
+	return rowIdx >= s.startRow && rowIdx <= s.endRow && colIdx >= s.startCol && colIdx <= s.endCol
+}
 
 // ParseWorkbookModel reads an XLSX from r/size and returns the intermediate representation.
 func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
@@ -20,7 +90,71 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 
 	var model WorkbookModel
 
+	// tableOffset tracks the position in wb.Tables() for each sheet
+	tableOffset := 0
 	for _, sheet := range wb.Sheets() {
+		// Build table style infos for this sheet using correct table part mapping
+		var tblStyles []simpleTableStyle
+		if sheet.X().TableParts != nil {
+			parts := sheet.X().TableParts.TablePart
+			sheetTables := wb.Tables()[tableOffset : tableOffset+len(parts)]
+			for _, tbl := range sheetTables {
+				ref := tbl.Reference()
+				from, to, err := reference.ParseRangeReference(ref)
+				fmt.Println("from, to:", from, to)
+				if err != nil {
+					continue
+				}
+				styleInfo := tbl.X().TableStyleInfo
+				fmt.Println("styleInfo:", styleInfo)
+				// Resolve colors from dxf based on table style name
+				var colors tableColors
+				if styleInfo != nil && styleInfo.NameAttr != nil {
+					ss := wb.StyleSheet.X()
+					fmt.Println("ss:", ss, "ts:", *ss.TableStyles.DefaultTableStyleAttr)
+					for _, ts := range ss.TableStyles.TableStyle {
+						fmt.Println("ts:", ts)
+						if ts.NameAttr == *styleInfo.NameAttr {
+							for _, elem := range ts.TableStyleElement {
+								var dxfId uint32
+								if elem.DxfIdAttr != nil {
+									dxfId = *elem.DxfIdAttr
+								}
+								switch elem.TypeAttr.String() {
+								case "headerRow":
+									if col, ok := getFillColorFromDxf(dxfId, ss, wb); ok {
+										colors.header = col
+									}
+								case "firstRowStripe":
+									if col, ok := getFillColorFromDxf(dxfId, ss, wb); ok {
+										colors.stripe1 = col
+										if elem.SizeAttr != nil {
+											colors.stripeSize = *elem.SizeAttr
+										}
+									}
+								case "secondRowStripe":
+									if col, ok := getFillColorFromDxf(dxfId, ss, wb); ok {
+										colors.stripe2 = col
+									}
+								}
+							}
+						}
+					}
+				}
+				if colors.stripeSize == 0 {
+					colors.stripeSize = 1
+				}
+				tblStyles = append(tblStyles, simpleTableStyle{
+					startRow: int(from.RowIdx - 1),
+					endRow:   int(to.RowIdx - 1),
+					startCol: int(from.ColumnIdx),
+					endCol:   int(to.ColumnIdx),
+					colors:   colors,
+				})
+			}
+			tableOffset += len(parts)
+		}
+
 		// ---- find max column ----
 		maxCols := 0
 		for _, row := range sheet.Rows() {
@@ -148,6 +282,30 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 						}
 						if xf.Alignment.IndentAttr != nil {
 							st.IndentPx = float64(*xf.Alignment.IndentAttr) * 8.0
+						}
+					}
+				}
+
+				// Apply table styling overrides (header fill and row stripes)
+				for _, ti := range tblStyles {
+					if !ti.contains(rowIdx, colIdx) {
+						continue
+					}
+					// Header
+					if rowIdx == ti.startRow {
+						if ti.colors.header != "" {
+							st.BackgroundColor = ti.colors.header
+						}
+						break
+					}
+					// Row stripes
+					if ti.colors.stripe1 != "" || ti.colors.stripe2 != "" {
+						rel := rowIdx - (ti.startRow + 1) // rows after header
+						band := (rel / int(ti.colors.stripeSize)) % 2
+						if band == 0 && ti.colors.stripe1 != "" {
+							st.BackgroundColor = ti.colors.stripe1
+						} else if band == 1 && ti.colors.stripe2 != "" {
+							st.BackgroundColor = ti.colors.stripe2
 						}
 					}
 				}
