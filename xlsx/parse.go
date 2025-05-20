@@ -3,8 +3,10 @@ package xlsx
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
+	"github.com/unidoc/unioffice/schema/soo/sml"
 	"github.com/unidoc/unioffice/spreadsheet"
 	"github.com/unidoc/unioffice/spreadsheet/reference"
 )
@@ -151,12 +153,58 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 				}
 
 				rc := &RenderCell{
-					Cell:    cell,
-					Ref:     fmt.Sprintf("%s%d", colName, rowIdx+1),
-					Value:   cell.GetFormattedValue(),
+					Cell:  cell,
+					Ref:   fmt.Sprintf("%s%d", colName, rowIdx+1),
+					Value: cell.GetFormattedValue(),
+					// Runs will be populated below if rich text present
 					ColSpan: 1,
 					RowSpan: 1,
 					Style:   st,
+				}
+
+				// Check for rich-text runs
+				rt := cellRichTextString(cell, wb)
+				if rt != nil && len(rt.R) > 0 {
+					fmt.Println(rc.Ref)
+					// Prefer runs if present, else fallback on plain text T
+					if len(rt.R) > 0 {
+						for _, r := range rt.R {
+							text := r.T
+							run := RenderRun{Text: text}
+							if rp := r.RPr; rp != nil {
+								if rp.RFont != nil {
+									run.FontFamily = rp.RFont.ValAttr
+								}
+								if rp.Sz != nil {
+									run.FontSizePt = rp.Sz.ValAttr
+								}
+								if rp.Color != nil {
+									if rp.Color.RgbAttr != nil {
+										run.FontColor = normalizeColor(*rp.Color.RgbAttr)
+									} else if rp.Color.ThemeAttr != nil {
+										themeIdx := int(*rp.Color.ThemeAttr)
+										// Skip Light1 (theme 1) which typically represents default automatic font color (black) in Excel.
+										if themeIdx != 1 {
+											if hex, ok := ThemeColorToRGB(wb, themeIdx); ok {
+												run.FontColor = hex
+											}
+										}
+									}
+								}
+								run.Bold = rp.B != nil
+								run.Italic = rp.I != nil
+								run.Strike = rp.Strike != nil
+								run.Underline = rp.U != nil
+								if rp.VertAlign != nil {
+									run.VerticalAlign = rp.VertAlign.ValAttr.String()
+								}
+							}
+							rc.Runs = append(rc.Runs, run)
+						}
+					} else if rt.T != nil {
+						// Single run of plain text; keep consistency
+						rc.Runs = []RenderRun{{Text: *rt.T}}
+					}
 				}
 				// check if this cell is a merge master
 				if info, ok := mergeMaster[[2]int{rowIdx, colIdx}]; ok {
@@ -174,56 +222,28 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 	return model, nil
 }
 
-// styleToCSS converts a CellStyle to a CSS string.
-func styleToCSS(s CellStyle) string {
-	var b strings.Builder
-	if s.FontFamily != "" {
-		b.WriteString(fmt.Sprintf("font-family:'%s';", s.FontFamily))
+func cellRichTextString(cell spreadsheet.Cell, w *spreadsheet.Workbook) *sml.CT_Rst {
+	x := cell.X()
+	if x.Is != nil {
+		return x.Is
 	}
-	if s.FontSizePt > 0 {
-		b.WriteString(fmt.Sprintf("font-size:%.1fpt;", s.FontSizePt))
-	}
-	if s.FontColor != "" {
-		b.WriteString(fmt.Sprintf("color:#%s;", s.FontColor))
-	}
-	if s.BackgroundColor != "" {
-		b.WriteString(fmt.Sprintf("background-color:#%s;", s.BackgroundColor))
-	}
-	if s.BorderColor != "" {
-		b.WriteString(fmt.Sprintf("border:1px solid #%s;", s.BorderColor))
-	} else {
-		b.WriteString("border:1px solid #333;")
-	}
-	switch s.HorizontalAlign {
-	case "center", "centerContinuous", "distributed":
-		b.WriteString("text-align:center;")
-	case "right":
-		b.WriteString("text-align:right;")
-	case "justify":
-		b.WriteString("text-align:justify;")
-	default:
-		b.WriteString("text-align:left;")
-	}
-	if s.VerticalAlign == "top" {
-		b.WriteString("vertical-align:top;")
-	} else if s.VerticalAlign == "middle" {
-		b.WriteString("vertical-align:middle;")
-	} else {
-		b.WriteString("vertical-align:bottom;")
-	}
-	if s.WrapText {
-		b.WriteString("white-space:normal;")
-	} else {
-		b.WriteString("white-space:nowrap;overflow:hidden;")
-	}
-	if s.IndentPx > 0 {
-		if strings.Contains(b.String(), "text-align:right") {
-			b.WriteString(fmt.Sprintf("padding-right:%.0fpx;", s.IndentPx))
-		} else {
-			b.WriteString(fmt.Sprintf("padding-left:%.0fpx;", s.IndentPx))
+	if x.TAttr == sml.ST_CellTypeS {
+		if x.V == nil {
+			return nil
 		}
+		id, err := strconv.Atoi(*x.V)
+		if err != nil {
+			return nil
+		}
+
+		ssx := w.SharedStrings.X()
+		if id < 0 || id >= len(ssx.Si) {
+			return nil
+		}
+
+		return ssx.Si[id]
 	}
-	return b.String()
+	return nil
 }
 
 // normalizeColor converts an 8-digit ARGB hex (as used in XLSX) to a 6-digit RGB string.

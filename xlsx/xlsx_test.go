@@ -2,13 +2,13 @@ package xlsx
 
 import (
 	"encoding/xml"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
 )
 
 func TestXlsxToHTML(t *testing.T) {
+	DebugHTML = true
 	f, err := os.Open("test.xlsx")
 	if err != nil {
 		t.Fatalf("failed to open test.xlsx: %v", err)
@@ -23,20 +23,20 @@ func TestXlsxToHTML(t *testing.T) {
 		t.Fatalf("failed to parse workbook model: %v", err)
 	}
 
-	for _, sheet := range ir.Sheets {
-		for _, row := range sheet.Rows {
-			for _, cell := range row.Cells {
-				if cell != nil && cell.Ref == "F98" {
-					// Doesn't have any things directly attached,
-					// 	<CT_Cell r="F98" s="7" t="s">
-					// 	<ma:v>404</ma:v>
-					// </CT_Cell>
-					fmt.Println(SprintXML(cell.Cell.X()))
-					fmt.Println(cell.String())
-				}
-			}
-		}
-	}
+	// for _, sheet := range ir.Sheets {
+	// 	for _, row := range sheet.Rows {
+	// 		for _, cell := range row.Cells {
+	// 			if cell != nil && cell.Ref == "F98" {
+	// 				// Doesn't have any things directly attached,
+	// 				// 	<CT_Cell r="F98" s="7" t="s">
+	// 				// 	<ma:v>404</ma:v>
+	// 				// </CT_Cell>
+	// 				fmt.Println(SprintXML(cell.Cell.X()))
+	// 				fmt.Println(cell.String())
+	// 			}
+	// 		}
+	// 	}
+	// }
 
 	html := RenderWorkbookHTML(ir)
 

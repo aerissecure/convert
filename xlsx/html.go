@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// DebugHTML controls whether extra data attributes with raw CellStyle info are included in the rendered HTML.
+var DebugHTML bool
+
 // RenderWorkbookHTML converts the IR into an HTML string.
 func RenderWorkbookHTML(m WorkbookModel) string {
 	var builder strings.Builder
@@ -198,7 +201,7 @@ func RenderWorkbookHTML(m WorkbookModel) string {
 		className := fmt.Sprintf("cellstyle%d", i+1)
 		css := styleToCSSDiff(style, defaultFontFamily, defaultFontSize, defaultBorderColor, defaultHAlign, defaultVAlign, defaultFontColor, defaultBgColor, defaultWrapText, defaultIndentPx)
 		if css != "" {
-			builder.WriteString(fmt.Sprintf(".%s { %s }\n", className, css))
+			builder.WriteString(fmt.Sprintf(".table td.%s { %s }\n", className, css))
 		}
 	}
 	builder.WriteString(`</style>
@@ -249,11 +252,37 @@ func RenderWorkbookHTML(m WorkbookModel) string {
 					spanAttr += fmt.Sprintf(" rowspan=\"%d\"", cell.RowSpan)
 				}
 
-				escaped := html.EscapeString(cell.Value)
-				// Excel stores explicit line breaks as \n; preserve them in HTML
-				escaped = strings.ReplaceAll(escaped, "\n", "<br>")
-				builder.WriteString(fmt.Sprintf("    <td data-cell=\"%s\"%s class=\"%s\">%s</td>\n",
-					cell.Ref, spanAttr, className, escaped))
+				// Build cell inner HTML: either rich runs or plain value
+				var innerHTML string
+				if len(cell.Runs) > 0 {
+					var runB strings.Builder
+					for _, run := range cell.Runs {
+						text := html.EscapeString(run.Text)
+						text = strings.ReplaceAll(text, "\n", "<br>")
+						style := runToInlineCSS(run)
+						runDebugAttr := ""
+						if DebugHTML {
+							runDebugAttr = fmt.Sprintf(" data-run-style=\"%s\"", html.EscapeString(fmt.Sprintf("%+v", run)))
+						}
+						if style != "" {
+							runB.WriteString(fmt.Sprintf("<span style=\"%s\"%s>%s</span>", style, runDebugAttr, text))
+						} else {
+							runB.WriteString(fmt.Sprintf("<span%s>%s</span>", runDebugAttr, text))
+						}
+					}
+					innerHTML = runB.String()
+				} else {
+					escaped := html.EscapeString(cell.Value)
+					escaped = strings.ReplaceAll(escaped, "\n", "<br>")
+					innerHTML = escaped
+				}
+
+				debugAttr := ""
+				if DebugHTML {
+					debugAttr = fmt.Sprintf(" data-style=\"%s\"", html.EscapeString(fmt.Sprintf("%+v", cell.Style)))
+				}
+				builder.WriteString(fmt.Sprintf("    <td data-cell=\"%s\"%s class=\"%s\"%s>%s</td>\n",
+					cell.Ref, spanAttr, className, debugAttr, innerHTML))
 
 				// Skip over columns that are covered by this cell's colspan so we don't emit extra cells
 				if cell.ColSpan > 1 {
@@ -320,6 +349,40 @@ func styleToCSSDiff(s CellStyle, defFontFamily string, defFontSize float64, defB
 		} else {
 			b.WriteString(fmt.Sprintf("padding-left:%.0fpx;", s.IndentPx))
 		}
+	}
+	return b.String()
+}
+
+// runToInlineCSS converts a RenderRun's style overrides into an inline CSS string.
+func runToInlineCSS(r RenderRun) string {
+	var b strings.Builder
+	if r.FontFamily != "" {
+		b.WriteString(fmt.Sprintf("font-family:'%s';", r.FontFamily))
+	}
+	if r.FontSizePt > 0 {
+		b.WriteString(fmt.Sprintf("font-size:%.1fpt;", r.FontSizePt))
+	}
+	if r.FontColor != "" {
+		b.WriteString(fmt.Sprintf("color:#%s;", r.FontColor))
+	}
+	if r.Bold {
+		b.WriteString("font-weight:bold;")
+	}
+	if r.Italic {
+		b.WriteString("font-style:italic;")
+	}
+	if r.Underline && r.Strike {
+		b.WriteString("text-decoration:underline line-through;")
+	} else if r.Underline {
+		b.WriteString("text-decoration:underline;")
+	} else if r.Strike {
+		b.WriteString("text-decoration:line-through;")
+	}
+	switch r.VerticalAlign {
+	case "superscript":
+		b.WriteString("vertical-align:super;")
+	case "subscript":
+		b.WriteString("vertical-align:sub;")
 	}
 	return b.String()
 }

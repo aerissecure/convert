@@ -27,18 +27,36 @@ func (s CellStyle) String() string {
 	return fmt.Sprintf("FontFamily: %s, FontSizePt: %f, FontColor: %s, BackgroundColor: %s, BorderColor: %s, HorizontalAlign: %s, VerticalAlign: %s, WrapText: %t, IndentPx: %f", s.FontFamily, s.FontSizePt, s.FontColor, s.BackgroundColor, s.BorderColor, s.HorizontalAlign, s.VerticalAlign, s.WrapText, s.IndentPx)
 }
 
+// RenderRun represents a rich-text run within a cell, holding its text and styling.
+type RenderRun struct {
+	Text          string
+	FontFamily    string  // optional override
+	FontSizePt    float64 // optional override
+	FontColor     string  // "RRGGBB"
+	Bold          bool
+	Italic        bool
+	Underline     bool
+	Strike        bool
+	VerticalAlign string // "superscript"|"subscript"|"baseline"
+}
+
+func (r RenderRun) String() string {
+	return fmt.Sprintf("Text: %s, FontFamily: %s, FontSizePt: %f, FontColor: %s, Bold: %t, Italic: %t, Underline: %t, Strike: %t, VerticalAlign: %s", r.Text, r.FontFamily, r.FontSizePt, r.FontColor, r.Bold, r.Italic, r.Underline, r.Strike, r.VerticalAlign)
+}
+
 // RenderCell is the IR for a single cell (or merged master).
 type RenderCell struct {
 	Cell    spreadsheet.Cell
-	Ref     string    // e.g. "A1"
-	Value   string    // already formatted value
-	ColSpan int       // 1 if not merged
-	RowSpan int       // 1 if not merged
-	Style   CellStyle // resolved style
+	Ref     string      // e.g. "A1"
+	Value   string      // already formatted value
+	Runs    []RenderRun // optional rich-text runs if the cell contains multiple formatted runs
+	ColSpan int         // 1 if not merged
+	RowSpan int         // 1 if not merged
+	Style   CellStyle   // resolved style
 }
 
 func (c RenderCell) String() string {
-	return fmt.Sprintf("Ref: %s, Value: %s, ColSpan: %d, RowSpan: %d, Style: %s", c.Ref, c.Value, c.ColSpan, c.RowSpan, c.Style.String())
+	return fmt.Sprintf("Ref: %s, Value: %s, Runs: %d, ColSpan: %d, RowSpan: %d, Style: %s", c.Ref, c.Value, len(c.Runs), c.ColSpan, c.RowSpan, c.Style.String())
 }
 
 // RenderRow represents one logical row in a sheet.
