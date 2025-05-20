@@ -194,13 +194,60 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 			tableOffset += len(parts)
 		}
 
-		// ---- find max column ----
-		maxCols := 0
+		// ---- determine sheet content bounds ----
+		lastContentRow := -1
+		lastContentCol := -1
+
+		// Scan all cells that actually exist in the XML. Any defined cell is
+		// considered content because it either has a value or explicit
+		// formatting. While scanning we keep track of the furthest row and
+		// column indexes encountered.
 		for _, row := range sheet.Rows() {
-			if len(row.Cells()) > maxCols {
-				maxCols = len(row.Cells())
+			rowIdx := int(row.RowNumber()) - 1
+			if len(row.Cells()) > 0 && rowIdx > lastContentRow {
+				lastContentRow = rowIdx
+			}
+			for _, cell := range row.Cells() {
+				colName, err := cell.Column()
+				if err != nil {
+					continue
+				}
+				colIdx := int(reference.ColumnToIndex(colName))
+				if colIdx > lastContentCol {
+					lastContentCol = colIdx
+				}
 			}
 		}
+
+		// Merged cells can extend the used range beyond the cells explicitly
+		// present in the XML, so include their bottom-right coordinates too.
+		if sheet.X().MergeCells != nil {
+			for _, mc := range sheet.X().MergeCells.MergeCell {
+				_, to, err := reference.ParseRangeReference(mc.RefAttr)
+				if err != nil {
+					continue
+				}
+				rowIdx := int(to.RowIdx - 1)
+				colIdx := int(to.ColumnIdx)
+				if rowIdx > lastContentRow {
+					lastContentRow = rowIdx
+				}
+				if colIdx > lastContentCol {
+					lastContentCol = colIdx
+				}
+			}
+		}
+
+		// Ensure we have at least one row/column so downstream logic works on
+		// completely empty sheets.
+		if lastContentRow < 0 {
+			lastContentRow = 0
+		}
+		if lastContentCol < 0 {
+			lastContentCol = 0
+		}
+
+		maxCols := lastContentCol + 1
 
 		// Column metadata
 		colWidths := make([]float64, maxCols)
@@ -252,6 +299,10 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 		// --- build rows ---
 		for _, row := range sheet.Rows() {
 			rowIdx := int(row.RowNumber()) - 1
+			if rowIdx > lastContentRow {
+				// Row is beyond the used range – ignore.
+				continue
+			}
 			if rowIdx >= len(rs.Rows) {
 				// grow slice to accommodate sparse rows
 				newRows := make([]RenderRow, rowIdx-len(rs.Rows)+1)
@@ -273,6 +324,10 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 					continue
 				}
 				colIdx := int(reference.ColumnToIndex(colName))
+				if colIdx > lastContentCol {
+					// Cell lies outside the used column range – ignore.
+					continue
+				}
 				if skipCells[[2]int{rowIdx, colIdx}] {
 					continue
 				}
@@ -414,6 +469,12 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 
 				rr.Cells[colIdx] = rc
 			}
+		}
+
+		// Ensure the rows slice spans the full used row range, in case the
+		// sheet contains merges extending beyond the last explicit row.
+		if len(rs.Rows) < lastContentRow+1 {
+			rs.Rows = append(rs.Rows, make([]RenderRow, lastContentRow+1-len(rs.Rows))...)
 		}
 
 		model.Sheets = append(model.Sheets, rs)
