@@ -3,11 +3,20 @@ package xlsx
 import (
 	"fmt"
 	"html"
+	"io"
 	"strings"
 )
 
 // DebugHTML controls whether extra data attributes with raw CellStyle info are included in the rendered HTML.
 var DebugHTML bool
+
+func XLSXToHTML(r io.ReaderAt, size int64) (string, error) {
+	ir, err := ParseWorkbookModel(r, size)
+	if err != nil {
+		return "", err
+	}
+	return RenderWorkbookHTML(ir), nil
+}
 
 // RenderWorkbookHTML converts the IR into an HTML string.
 func RenderWorkbookHTML(m WorkbookModel) string {
@@ -142,10 +151,8 @@ func RenderWorkbookHTML(m WorkbookModel) string {
 	defaultIndentPx := 0.0 // no default indent
 
 	// 3. Basic CSS
-	builder.WriteString(`<style>
-`)
-	builder.WriteString(`.table { border-collapse: collapse; table-layout: fixed; margin-bottom: 2em; }
-`)
+	builder.WriteString(`<style>`)
+	builder.WriteString(`.table { border-collapse: collapse; table-layout: fixed; margin-bottom: 2em; }`)
 	builder.WriteString(`.table td { padding: 4px 8px;`)
 	if defaultFontFamily != "" {
 		builder.WriteString(fmt.Sprintf(" font-family:'%s';", defaultFontFamily))
@@ -191,10 +198,8 @@ func RenderWorkbookHTML(m WorkbookModel) string {
 		}
 	}
 	// WrapText and IndentPx are less common as defaults, so skip for now
-	builder.WriteString(` }
-`)
-	builder.WriteString(`.sheet { margin-bottom: 2em; }
-`)
+	builder.WriteString(` }`)
+	builder.WriteString(`.sheet { margin-bottom: 2em; }`)
 
 	// 4. Render cell style classes (only properties that differ from default)
 	for i, style := range styleList {
@@ -204,20 +209,18 @@ func RenderWorkbookHTML(m WorkbookModel) string {
 			builder.WriteString(fmt.Sprintf(".table td.%s { %s }\n", className, css))
 		}
 	}
-	builder.WriteString(`</style>
-`)
+	builder.WriteString(`</style>`)
 
 	for _, sheet := range m.Sheets {
 		totalPx := 0.0
 		for _, w := range sheet.ColWidths {
 			totalPx += w
 		}
-		builder.WriteString(fmt.Sprintf(`<div class="sheet" data-name="%s">
-`, html.EscapeString(sheet.Name)))
-		builder.WriteString(`<div style="width:100%;overflow-x:auto;">
-`)
-		builder.WriteString(fmt.Sprintf(`<table class="table" style="width:%.0fpx;">
-`, totalPx))
+		builder.WriteString(fmt.Sprintf(
+			`<div class="sheet" data-name="%s">`,
+			html.EscapeString(sheet.Name),
+		))
+		builder.WriteString(fmt.Sprintf(`<table class="table" style="width:%.0fpx;">`, totalPx))
 		builder.WriteString("  <colgroup>\n")
 		for i, w := range sheet.ColWidths {
 			style := fmt.Sprintf(" style=\"width:%.0fpx;\"", w)
@@ -291,7 +294,7 @@ func RenderWorkbookHTML(m WorkbookModel) string {
 			}
 			builder.WriteString("  </tr>\n")
 		}
-		builder.WriteString("</table>\n</div>\n</div>\n")
+		builder.WriteString("</table>\n</div>\n")
 	}
 	return builder.String()
 }

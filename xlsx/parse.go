@@ -50,7 +50,25 @@ func resolveCTColor(c *sml.CT_Color, wb *spreadsheet.Workbook) (string, bool) {
 	return "", false
 }
 
-// getFillColorFromDxf returns hex color from dxf fill.
+// getTableStyleFillColorFromDxf returns hex color from dxf fill. for table
+// styles.
+func getTableStyleFillColorFromDxf(dxfId uint32, ss *sml.StyleSheet, wb *spreadsheet.Workbook) (string, bool) {
+	if ss.Dxfs == nil || int(dxfId) >= len(ss.Dxfs.Dxf) {
+		return "", false
+	}
+	dxf := ss.Dxfs.Dxf[dxfId]
+	if dxf.Fill != nil && dxf.Fill.PatternFill != nil {
+		if dxf.Fill.PatternFill.BgColor != nil {
+			return resolveCTColor(dxf.Fill.PatternFill.BgColor, wb)
+		}
+		if dxf.Fill.PatternFill.FgColor != nil {
+			return resolveCTColor(dxf.Fill.PatternFill.FgColor, wb)
+		}
+	}
+	return "", false
+}
+
+// getFillColorFromDxf returns hex color from dxf fill, for standard cells.
 func getFillColorFromDxf(dxfId uint32, ss *sml.StyleSheet, wb *spreadsheet.Workbook) (string, bool) {
 	if ss.Dxfs == nil || int(dxfId) >= len(ss.Dxfs.Dxf) {
 		return "", false
@@ -106,34 +124,49 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 					continue
 				}
 				styleInfo := tbl.X().TableStyleInfo
-				fmt.Println("styleInfo:", styleInfo)
-				// Resolve colors from dxf based on table style name
+
+				// Use table style if it exists. If the table style is default/built-in
+				// its properties are not embedded in the xml, so we fall back to a
+				// default defined here.
+				//
+				// Custom table styles are embedded and they will be used.
+
+				ss := wb.StyleSheet.X()
 				var colors tableColors
-				if styleInfo != nil && styleInfo.NameAttr != nil {
-					ss := wb.StyleSheet.X()
-					fmt.Println("ss:", ss, "ts:", *ss.TableStyles.DefaultTableStyleAttr)
+				if styleInfo != nil && styleInfo.NameAttr != nil && ss.TableStyles != nil {
+					if ss.TableStyles.DefaultTableStyleAttr != nil {
+						// Built-in table style is set so fall back on our defined default.
+						colors.header = "D9D9D9"  // light grey
+						colors.stripe1 = "F2F2F2" // very light grey banding
+						colors.stripeSize = 1
+					}
+
 					for _, ts := range ss.TableStyles.TableStyle {
 						fmt.Println("ts:", ts)
 						if ts.NameAttr == *styleInfo.NameAttr {
+							fmt.Println("MATCHES")
 							for _, elem := range ts.TableStyleElement {
+								// TODO: Table style can set all types of formatting, but we
+								// only support fill colors for now.
+								fmt.Println(elem.TypeAttr.String())
 								var dxfId uint32
 								if elem.DxfIdAttr != nil {
 									dxfId = *elem.DxfIdAttr
 								}
 								switch elem.TypeAttr.String() {
 								case "headerRow":
-									if col, ok := getFillColorFromDxf(dxfId, ss, wb); ok {
+									if col, ok := getTableStyleFillColorFromDxf(dxfId, ss, wb); ok {
 										colors.header = col
 									}
 								case "firstRowStripe":
-									if col, ok := getFillColorFromDxf(dxfId, ss, wb); ok {
+									if col, ok := getTableStyleFillColorFromDxf(dxfId, ss, wb); ok {
 										colors.stripe1 = col
 										if elem.SizeAttr != nil {
 											colors.stripeSize = *elem.SizeAttr
 										}
 									}
 								case "secondRowStripe":
-									if col, ok := getFillColorFromDxf(dxfId, ss, wb); ok {
+									if col, ok := getTableStyleFillColorFromDxf(dxfId, ss, wb); ok {
 										colors.stripe2 = col
 									}
 								}
@@ -141,9 +174,15 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 						}
 					}
 				}
-				if colors.stripeSize == 0 {
-					colors.stripeSize = 1
+
+				if colors.stripe1 == "" && styleInfo != nil && styleInfo.ShowRowStripesAttr != nil && *styleInfo.ShowRowStripesAttr {
+					if tbl.X().DataDxfIdAttr != nil {
+						if col, ok := getFillColorFromDxf(*tbl.X().DataDxfIdAttr, ss, wb); ok {
+							colors.stripe1 = col
+						}
+					}
 				}
+
 				tblStyles = append(tblStyles, simpleTableStyle{
 					startRow: int(from.RowIdx - 1),
 					endRow:   int(to.RowIdx - 1),
@@ -293,7 +332,8 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 					}
 					// Header
 					if rowIdx == ti.startRow {
-						if ti.colors.header != "" {
+						// Only apply header fill if the cell itself doesn't already specify one.
+						if st.BackgroundColor == "" && ti.colors.header != "" {
 							st.BackgroundColor = ti.colors.header
 						}
 						break
@@ -302,10 +342,12 @@ func ParseWorkbookModel(r io.ReaderAt, size int64) (WorkbookModel, error) {
 					if ti.colors.stripe1 != "" || ti.colors.stripe2 != "" {
 						rel := rowIdx - (ti.startRow + 1) // rows after header
 						band := (rel / int(ti.colors.stripeSize)) % 2
-						if band == 0 && ti.colors.stripe1 != "" {
-							st.BackgroundColor = ti.colors.stripe1
-						} else if band == 1 && ti.colors.stripe2 != "" {
-							st.BackgroundColor = ti.colors.stripe2
+						if st.BackgroundColor == "" { // only override if cell has no explicit fill
+							if band == 0 && ti.colors.stripe1 != "" {
+								st.BackgroundColor = ti.colors.stripe1
+							} else if band == 1 && ti.colors.stripe2 != "" {
+								st.BackgroundColor = ti.colors.stripe2
+							}
 						}
 					}
 				}

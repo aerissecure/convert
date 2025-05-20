@@ -18,30 +18,58 @@ func TestXlsxToHTML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to stat test.xlsx: %v", err)
 	}
-	ir, err := ParseWorkbookModel(f, info.Size())
+
+	html, err := XLSXToHTML(f, info.Size())
 	if err != nil {
-		t.Fatalf("failed to parse workbook model: %v", err)
+		t.Fatalf("failed to convert xlsx to html: %v", err)
 	}
-
-	// for _, sheet := range ir.Sheets {
-	// 	for _, row := range sheet.Rows {
-	// 		for _, cell := range row.Cells {
-	// 			if cell != nil && cell.Ref == "F98" {
-	// 				// Doesn't have any things directly attached,
-	// 				// 	<CT_Cell r="F98" s="7" t="s">
-	// 				// 	<ma:v>404</ma:v>
-	// 				// </CT_Cell>
-	// 				fmt.Println(SprintXML(cell.Cell.X()))
-	// 				fmt.Println(cell.String())
-	// 			}
-	// 		}
-	// 	}
-	// }
-
-	html := RenderWorkbookHTML(ir)
-
 	// write html to file
 	err = os.WriteFile("test.xlsx.html", []byte(html), 0644)
+	if err != nil {
+		t.Fatalf("failed to write test.html: %v", err)
+	}
+}
+func TestXlsxToHTML2(t *testing.T) {
+	DebugHTML = true
+	f, err := os.Open("test2.xlsx")
+	if err != nil {
+		t.Fatalf("failed to open test.xlsx: %v", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("failed to stat test.xlsx: %v", err)
+	}
+
+	html, err := XLSXToHTML(f, info.Size())
+	if err != nil {
+		t.Fatalf("failed to convert xlsx to html: %v", err)
+	}
+	// write html to file
+	err = os.WriteFile("test2.xlsx.html", []byte(html), 0644)
+	if err != nil {
+		t.Fatalf("failed to write test.html: %v", err)
+	}
+}
+
+func TestXlsxToHTML3(t *testing.T) {
+	DebugHTML = true
+	f, err := os.Open("test3.xlsx")
+	if err != nil {
+		t.Fatalf("failed to open test.xlsx: %v", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("failed to stat test.xlsx: %v", err)
+	}
+
+	html, err := XLSXToHTML(f, info.Size())
+	if err != nil {
+		t.Fatalf("failed to convert xlsx to html: %v", err)
+	}
+	// write html to file
+	err = os.WriteFile("test3.xlsx.html", []byte(html), 0644)
 	if err != nil {
 		t.Fatalf("failed to write test.html: %v", err)
 	}
