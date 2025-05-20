@@ -4,11 +4,35 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"regexp"
 	"strings"
 )
 
 // DebugHTML controls whether extra data attributes with raw CellStyle info are included in the rendered HTML.
 var DebugHTML bool
+
+// Regular expressions used for sanitizing style values.
+var (
+	fontFamilySafeRe = regexp.MustCompile(`[^a-zA-Z0-9 ,_-]+`)
+	hexColorRe       = regexp.MustCompile(`^[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$`)
+)
+
+// sanitizeFontFamily strips any characters that are not considered safe for a CSS
+// font-family declaration. This prevents breaking out of the CSS context and
+// injecting arbitrary directives.
+func sanitizeFontFamily(s string) string {
+	return fontFamilySafeRe.ReplaceAllString(s, "")
+}
+
+// sanitizeColor ensures the value is a valid 3- or 6-digit hexadecimal string.
+// Any invalid input results in an empty string, preventing potential CSS or
+// markup injection.
+func sanitizeColor(s string) string {
+	if hexColorRe.MatchString(s) {
+		return s
+	}
+	return ""
+}
 
 func XLSXToHTML(r io.ReaderAt, size int64) (string, error) {
 	ir, err := ParseWorkbookModel(r, size)
@@ -155,19 +179,27 @@ func RenderWorkbookHTML(m WorkbookModel) string {
 	builder.WriteString(`.table { border-collapse: collapse; table-layout: fixed; margin-bottom: 2em; }`)
 	builder.WriteString(`.table td { padding: 4px 8px;`)
 	if defaultFontFamily != "" {
-		builder.WriteString(fmt.Sprintf(" font-family:'%s';", defaultFontFamily))
+		builder.WriteString(fmt.Sprintf(" font-family:'%s';", sanitizeFontFamily(defaultFontFamily)))
 	}
 	if defaultFontSize > 0 {
 		builder.WriteString(fmt.Sprintf(" font-size:%.1fpt;", defaultFontSize))
 	}
 	if defaultFontColor != "" {
-		builder.WriteString(fmt.Sprintf(" color:#%s;", defaultFontColor))
+		if safe := sanitizeColor(defaultFontColor); safe != "" {
+			builder.WriteString(fmt.Sprintf(" color:#%s;", safe))
+		}
 	}
 	if defaultBgColor != "" {
-		builder.WriteString(fmt.Sprintf(" background-color:#%s;", defaultBgColor))
+		if safe := sanitizeColor(defaultBgColor); safe != "" {
+			builder.WriteString(fmt.Sprintf(" background-color:#%s;", safe))
+		}
 	}
 	if defaultBorderColor != "" {
-		builder.WriteString(fmt.Sprintf(" border:1px solid #%s;", defaultBorderColor))
+		if safe := sanitizeColor(defaultBorderColor); safe != "" {
+			builder.WriteString(fmt.Sprintf(" border:1px solid #%s;", safe))
+		} else {
+			builder.WriteString(" border:1px solid #333;")
+		}
 	} else {
 		builder.WriteString(" border:1px solid #333;")
 	}
@@ -285,7 +317,7 @@ func RenderWorkbookHTML(m WorkbookModel) string {
 					debugAttr = fmt.Sprintf(" data-style=\"%s\"", html.EscapeString(fmt.Sprintf("%+v", cell.Style)))
 				}
 				builder.WriteString(fmt.Sprintf("    <td data-cell=\"%s\"%s class=\"%s\"%s>%s</td>\n",
-					cell.Ref, spanAttr, className, debugAttr, innerHTML))
+					html.EscapeString(cell.Ref), spanAttr, className, debugAttr, innerHTML))
 
 				// Skip over columns that are covered by this cell's colspan so we don't emit extra cells
 				if cell.ColSpan > 1 {
@@ -303,19 +335,25 @@ func RenderWorkbookHTML(m WorkbookModel) string {
 func styleToCSSDiff(s CellStyle, defFontFamily string, defFontSize float64, defBorderColor, defHAlign, defVAlign, defFontColor, defBgColor string, defWrapText bool, defIndentPx float64) string {
 	var b strings.Builder
 	if s.FontFamily != "" && s.FontFamily != defFontFamily {
-		b.WriteString(fmt.Sprintf("font-family:'%s';", s.FontFamily))
+		b.WriteString(fmt.Sprintf("font-family:'%s';", sanitizeFontFamily(s.FontFamily)))
 	}
 	if s.FontSizePt > 0 && s.FontSizePt != defFontSize {
 		b.WriteString(fmt.Sprintf("font-size:%.1fpt;", s.FontSizePt))
 	}
 	if s.FontColor != "" && s.FontColor != defFontColor {
-		b.WriteString(fmt.Sprintf("color:#%s;", s.FontColor))
+		if safe := sanitizeColor(s.FontColor); safe != "" {
+			b.WriteString(fmt.Sprintf("color:#%s;", safe))
+		}
 	}
 	if s.BackgroundColor != "" && s.BackgroundColor != defBgColor {
-		b.WriteString(fmt.Sprintf("background-color:#%s;", s.BackgroundColor))
+		if safe := sanitizeColor(s.BackgroundColor); safe != "" {
+			b.WriteString(fmt.Sprintf("background-color:#%s;", safe))
+		}
 	}
 	if s.BorderColor != "" && s.BorderColor != defBorderColor {
-		b.WriteString(fmt.Sprintf("border:1px solid #%s;", s.BorderColor))
+		if safe := sanitizeColor(s.BorderColor); safe != "" {
+			b.WriteString(fmt.Sprintf("border:1px solid #%s;", safe))
+		}
 	}
 	if s.HorizontalAlign != "" && s.HorizontalAlign != defHAlign {
 		switch s.HorizontalAlign {
@@ -360,13 +398,15 @@ func styleToCSSDiff(s CellStyle, defFontFamily string, defFontSize float64, defB
 func runToInlineCSS(r RenderRun) string {
 	var b strings.Builder
 	if r.FontFamily != "" {
-		b.WriteString(fmt.Sprintf("font-family:'%s';", r.FontFamily))
+		b.WriteString(fmt.Sprintf("font-family:'%s';", sanitizeFontFamily(r.FontFamily)))
 	}
 	if r.FontSizePt > 0 {
 		b.WriteString(fmt.Sprintf("font-size:%.1fpt;", r.FontSizePt))
 	}
 	if r.FontColor != "" {
-		b.WriteString(fmt.Sprintf("color:#%s;", r.FontColor))
+		if safe := sanitizeColor(r.FontColor); safe != "" {
+			b.WriteString(fmt.Sprintf("color:#%s;", safe))
+		}
 	}
 	if r.Bold {
 		b.WriteString("font-weight:bold;")
