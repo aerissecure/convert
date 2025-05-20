@@ -240,7 +240,6 @@ func renderTableHTML(t RenderTable) string {
 // RenderDocumentHTML converts the DocumentModel into an HTML string.
 func RenderDocumentHTML(m DocumentModel) string {
 	var b strings.Builder
-	b.WriteString("<html><body>\n")
 
 	if len(m.Blocks) > 0 {
 		for _, blk := range m.Blocks {
@@ -259,8 +258,6 @@ func RenderDocumentHTML(m DocumentModel) string {
 			b.WriteString(renderTableHTML(tbl))
 		}
 	}
-
-	b.WriteString("</body></html>\n")
 	return b.String()
 }
 
